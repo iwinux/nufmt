@@ -1,0 +1,67 @@
+name: Build Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        type: string
+        description: "Release Tag"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - run: cargo install --locked cargo-zigbuild
+
+      - name: Build All Targets
+        run: |
+          set -euo pipefail
+
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin
+          do
+              cargo zigbuild --release --locked --target "$target" --bin nufmt
+          done
+
+      - name: Package
+        run: |
+          set -euo pipefail
+
+          TAG="${{ github.event.inputs.tag }}"
+          mkdir -p dist
+
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin
+          do
+              output="nufmt-${target}.zst"
+              zstd "target/${target}/release/nufmt" -o "dist/${output}"
+              shasum -a 256 "dist/${output}" | sed "s| dist/| |" > "dist/${output}.sha256"
+          done
+
+      - name: Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.event.inputs.tag }}
+          tag_name: ${{ github.event.inputs.tag }}
+          files: |
+            dist/*.zst
+            dist/*.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true
